@@ -1,0 +1,19 @@
+# 密钥：绝不提交
+key.txt
+.env
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# flyai CLI 依赖
+node_modules/
+
+# 每次运行覆盖的产物
+demo_output.md
+
+# 系统
+Thumbs.db
+.DS_Store
