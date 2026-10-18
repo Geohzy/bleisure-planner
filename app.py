@@ -16,7 +16,7 @@ from demo import MEETINGS as DEFAULT_MEETINGS, render_card
 
 PREFERENCE_CHOICES = ["美食", "夜景", "文化", "放松"]
 
-TABLE_HEADERS = ["序号", "站点", "距酒店", "出行方式", "耗时", "开始", "结束"]
+TABLE_HEADERS = ["序号", "站点", "距酒店", "出行方式", "耗时", "时段"]
 
 
 def _meetings_from_text(text):
@@ -65,7 +65,7 @@ def build_itinerary(city, hotel_kw, meeting_text, preferences):
         card = render_card(city, hotel, stops, notes, intro, reasons)
         rows = [
             [i + 1, s["poi"]["name"], f'{s["dist_km"]}km', s["leg_mode"],
-             f'{s["leg_min"]} 分钟', s["start"], s["end"]]
+             f'{s["leg_min"]} 分钟', f'{s["start"]}–{s["end"]}']
             for i, s in enumerate(stops)
         ]
         reason_md = (
