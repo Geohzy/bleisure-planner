@@ -146,7 +146,6 @@ bleisure-planner/
 ├── tests/test_core.py   # 单元测试（不触网）
 ├── docs/                # README 与在线 Demo 截图
 ├── DESIGN_SYSTEM.md     # 视觉规范（配色、字号、圆角、间距）
-├── SUBMIT.md            # 官方提交 issue 草稿
 └── README.md
 ```
 
@@ -160,11 +159,6 @@ python3 -m pytest tests -q
 
 测试全程不调用真实网络与第三方 API，`search_poi` 用假实现替换。当前覆盖：距离计算、交通方式选择、空闲窗口切分与合并、多路抓取去重与单路容错、结构化降级说明、换站与备选、离线裁决模板、开放时间解析与排站行为（含夜景兜底与 `respect_hours=False` 的旧行为回归）。
 
-## 提交材料
-
-- 演示视频：会议描述输入 → 行程卡输出全流程
-- 提交 issue 草稿见 `SUBMIT.md`，含官方必填的"百炼使用说明"
-- 提交前检查：`demo_output.md` 为最新运行产物；代码中无硬编码 Key
 
 ## License
 
