@@ -20,11 +20,24 @@ COPY_SYSTEM = ("你是「商旅融合行程官」的文案助手，风格轻松�
                "但信息准确、不编造。")
 
 
-def _bailian(prompt, api_key, system=COPY_SYSTEM, max_tokens=600, temperature=None):
+def _post(payload, api_key):
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        ENDPOINT, data=body,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+def _bailian(prompt, api_key, system=COPY_SYSTEM, max_tokens=600, temperature=None,
+             no_thinking=False):
     """百炼 OpenAI 兼容接口的单轮调用。
 
     按 MODELS 顺序逐个尝试，某个模型额度用尽 / 报错 / 返回空内容时自动回退到下一个；
     system / max_tokens / temperature 可按调用方覆盖。
+    no_thinking=True 时请求关闭思考模式（reasoning 会吃掉几十秒），
+    个别模型强制思考会返回 400，此时自动去掉该参数重试同一模型。
     """
     messages = [
         {"role": "system", "content": system},
@@ -35,14 +48,19 @@ def _bailian(prompt, api_key, system=COPY_SYSTEM, max_tokens=600, temperature=No
         payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:  # 结构化抽取场景传 0，保证结果稳定
             payload["temperature"] = temperature
-        body = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            ENDPOINT, data=body,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        )
+        if no_thinking:
+            payload["enable_thinking"] = False
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                data = json.load(r)
+            try:
+                data = _post(payload, api_key)
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode(errors="replace")[:160]
+                if not (no_thinking and "enable_thinking" in detail):
+                    raise
+                # 该模型强制思考模式：换下一个模型，避免为了关思考又退回几十秒
+                print(f"   模型 {model} 强制思考，跳过（请求关闭思考模式）")
+                last_err = e
+                continue
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:160]
             print(f"⚠ 模型 {model} 不可用（HTTP {e.code}）：{detail}")
@@ -74,7 +92,7 @@ def generate_intro(city, hotel_name, stops, api_key=None):
     prompt = (f"用户在{city}出差，住{hotel_name}，今晚的微行程如下：\n{detail}\n"
               f"请写一段 80 字以内的开场白，点出'带薪旅行'的快乐，提到今晚的 1-2 个地点。")
     try:
-        return _bailian(prompt, key)
+        return _bailian(prompt, key, no_thinking=True)
     except Exception as e:
         print(f"⚠ 生成开场白失败，改用本地模板：{e}")
         return _stub(city, stops)
@@ -109,6 +127,64 @@ def _window_text(window):
     if isinstance(window[0], str):
         return f"{window[0]}–{window[1]}"
     return "、".join(f"{a}–{b}" for a, b in window)
+
+
+def _template_verdict(stop, alternatives, dwell):
+    """裁决的离线模板版：只引用真实数字，不调模型。"""
+    p = stop["poi"]
+    lines = [
+        f"选它：距酒店 {stop['dist_km']}km、{stop['leg_mode']} {stop['leg_min']} 分钟，"
+        f"停留 {dwell} 分钟正好填满窗口。"
+    ]
+    if alternatives:
+        a = alternatives[0]
+        lines.append(
+            f"没选《{a['name']}》：距酒店 {a['dist_km']}km、{a['leg_mode']} "
+            f"{a['leg_min']} 分钟更耗时，会挤占回酒店时间。"
+        )
+    return "；".join(lines)
+
+
+def judge_verdict(stop, alternatives, dwell, api_key=None):
+    """为一站生成"对比裁决"：为什么选它、为什么没选备选。返回单段中文。
+
+    stop:          planner 生产的一站（含 poi/dist_km/leg_min/leg_mode/start/end）
+    alternatives:  同窗口落选的 1–2 个备选 POI 摘要，各含
+                   {"name","dist_km","leg_min","leg_mode"}
+    dwell:         该站停留分钟数（由 start/end 算出，避免模型改数字）
+    约束：只能引用入参给的真实数字，不许编造。无 Key 或调用失败时返回模板裁决。
+    """
+    if not alternatives:
+        return _template_verdict(stop, [], dwell)
+
+    key = api_key or os.environ.get("DASHSCOPE_API_KEY")
+    if not key:
+        return _template_verdict(stop, alternatives, dwell)
+
+    row = (f"选中站点：{stop['poi']['name']}｜距酒店 {stop['dist_km']}km｜"
+           f"{stop['leg_mode']} {stop['leg_min']} 分钟｜停留 {dwell} 分钟")
+    alts = "；".join(
+        f"备选《{a['name']}》｜距酒店 {a['dist_km']}km｜{a['leg_mode']} {a['leg_min']} 分钟"
+        for a in alternatives
+    )
+    prompt = (
+        "对比裁决。数据已算好，只能原样引用、不许新增或改动数字：\n"
+        f"选中：{row}\n备选：{alts}\n"
+        "输出两句话，分号分隔：①『选它：』给 1–2 个真实理由（引用距离/耗时/停留数字）；"
+        "②『没选《备选名》：』给真实劣势（引用其距离/耗时数字，点出为何让位）。"
+        "备选只讲最关键的 1 点。最高 120 字，只有这两句，不要额外文字。"
+    )
+    try:
+        raw = _bailian(prompt, key, system=(
+            "你是「商旅融合行程官」的行程裁决助手。你负责解释『为什么选 A 不选 B』。"
+            "铁律：所有数字只能原样引用给定数据，绝对不许编造距离/时间；"
+            "没给的理由不要编。输出简体中文，简洁。" ), max_tokens=200, temperature=0,
+            no_thinking=True)
+        raw = raw.strip().strip("；").strip()
+        return raw if raw else _template_verdict(stop, alternatives, dwell)
+    except Exception as e:
+        print(f"⚠ 生成裁决失败，改用模板：{e}")
+        return _template_verdict(stop, alternatives, dwell)
 
 
 def explain_plan(stops, legs, window, api_key=None):

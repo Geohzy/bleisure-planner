@@ -2,7 +2,7 @@
 import sys
 
 from flyai_client import build_queries, search_hotel, search_poi_multi
-from planner import plan, free_windows_from_meetings
+from planner import plan, free_windows_from_meetings, apply_buffer, open_hours_label
 from llm import generate_intro, explain_plan
 from natural import parse_meetings
 
@@ -45,6 +45,9 @@ def render_card(city, hotel, stops, notes, intro, reasons=None):
             f"{s['start']}–{s['end']} 📍 {p['name']}",
             f"{free} · {p['address']}",
         ]
+        hours = open_hours_label(p)
+        if hours:
+            lines.append(f"🕐 开放时间：{hours}")
         if p["desc"]:
             lines.append(f"> {p['desc']}")
         if reasons and i < len(reasons) and reasons[i]:
@@ -52,7 +55,15 @@ def render_card(city, hotel, stops, notes, intro, reasons=None):
         if p["url"]:
             lines.append(f"[查看详情/预订]({p['url']})")
     if notes:
-        lines += ["", "## 📝 行程说明"] + [f"- {n}" for n in notes]
+        lines += ["", "## 📝 行程说明"]
+        for n in notes:
+            # 兼容 notes 升级：字符串（旧）或结构化 dict（新，取 text 字段 + 三行）
+            if isinstance(n, dict):
+                lines.append(f"- {n['text']}")
+                lines.append(f"  卡在哪条约束：{n['constraint']}")
+                lines.append(f"  现实：{n['actual']} → 处理：{n['action']}")
+            else:
+                lines.append(f"- {n}")
     lines += ["", "——", "基于飞猪实时数据（flyai skill）生成 · 商旅融合行程官"]
     return "\n".join(lines)
 
@@ -92,7 +103,7 @@ def main():
     print(f"   拿到 {len(pois)} 个 POI")
 
     print("3/6 会议 → 空闲窗口…")
-    windows = free_windows_from_meetings(meetings)
+    windows = apply_buffer(free_windows_from_meetings(meetings), 30)
     print(f"   会议 {meetings} → 空闲 {windows}")
 
     print("4/6 规划微行程（含交通时间）…")
